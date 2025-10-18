@@ -1,237 +1,157 @@
 'use client';
-
-import React, { useCallback, useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { Scanner } from '@yudiel/react-qr-scanner';
 import { supabase } from '../../lib/supabase';
+import bcrypt from 'bcryptjs';
 
-type InvitadoInfo = {
-  id_invitado: string;
-  nombre: string | null;
-  apellido: string | null;
-  email: string | null;
-  reclamado: boolean | null;
-  user_id?: string | null;
-};
-
-function getTextFromScan(value: any): string {
-  if (!value) return '';
-  if (typeof value === 'string') return value.trim();
-  if (Array.isArray(value)) {
-    const raw = value[0]?.rawValue ?? value[0];
-    return typeof raw === 'string' ? raw.trim() : String(raw ?? '').trim();
-  }
-  if (value?.rawValue) return String(value.rawValue).trim();
-  return '';
-}
-
-export default function AuthPage() {
+export default function AuthQR() {
   const router = useRouter();
-
   const [scannedId, setScannedId] = useState('');
-  const [invitado, setInvitado] = useState<InvitadoInfo | null>(null);
-
-  const [email, setEmail] = useState('');
+  const [invitado, setInvitado] = useState<any>(null);
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(false);
 
-  // Buscar invitado por QR
+  // Buscar invitado por código QR
   const fetchInvitado = useCallback(async (id: string) => {
-    try {
-      setError(null);
-      const { data, error } = await supabase
-        .from('invitados')
-        .select('*')
-        .eq('id_invitado', id)
-        .maybeSingle();
-
-      if (error) throw error;
-
-      if (!data) {
-        setInvitado(null);
-        setError('Invitado no encontrado.');
-      } else {
-        setInvitado(data as InvitadoInfo);
-        if (data.email) setEmail(data.email);
-      }
-    } catch (err: any) {
-      console.error(err);
-      setError(err.message ?? 'Error al buscar invitado');
+    setError(null);
+    const { data, error } = await supabase
+      .from('invitados')
+      .select('*')
+      .eq('id_invitado', id)
+      .maybeSingle();
+    if (error) {
+      console.error(error);
+      setError('Error al buscar invitado');
+      return;
     }
+    setInvitado(data);
   }, []);
 
-  const handleScan = useCallback(
-    async (result: string) => {
-      if (!result) return;
-      const id = result.trim().toUpperCase();
-      if (id === scannedId) return;
+  // Cuando escanea QR
+  const handleScan = useCallback(async (value: any) => {
+    if (!value) return;
+    const id = typeof value === 'string' ? value.trim().toUpperCase() : String(value?.rawValue ?? '').trim().toUpperCase();
+    if (!id || id === scannedId) return;
+    setScannedId(id);
+    await fetchInvitado(id);
+  }, [scannedId, fetchInvitado]);
 
-      setScannedId(id);
-      await fetchInvitado(id);
-    },
-    [fetchInvitado, scannedId]
-  );
+  // Registrar invitado nuevo
+  const handleRegister = async () => {
+    if (!invitado) return;
+    if (!password || password.length < 4) {
+      setError('Contraseña mínima de 4 caracteres');
+      return;
+    }
 
-  // Registro o login
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setError(null);
-
-    if (!scannedId) return setError('Escanea tu QR primero.');
-    if (!invitado) return setError('Invitado no encontrado.');
-    if (!password) return setError('Ingresá una contraseña.');
-
-    setSaving(true);
+    setLoading(true);
     try {
-      // Si ya tiene cuenta → LOGIN
-      if (invitado.reclamado && invitado.email) {
-        const { error: signErr } = await supabase.auth.signInWithPassword({
-          email: invitado.email,
-          password,
-        });
-        if (signErr) throw new Error('Contraseña incorrecta');
-        router.push('/home');
-        return;
-      }
+      const hash = bcrypt.hashSync(password, 10);
+      const fakeEmail = `${invitado.id_invitado.toLowerCase()}@midea.local`;
 
-      // Si es nuevo → REGISTRO
-      if (!email) return setError('Ingresá un correo para registrarte.');
-
-      const { data: signData, error: signErr } = await supabase.auth.signUp({
-        email,
+      // Crear usuario interno
+      const { data: signup, error: signupErr } = await supabase.auth.signUp({
+        email: fakeEmail,
         password,
       });
-      if (signErr) throw signErr;
+      if (signupErr) throw signupErr;
 
-      const userId = signData.user?.id;
-
-      const { error: upErr } = await supabase
+      // Guardar en la tabla invitados
+      await supabase
         .from('invitados')
         .update({
-          email,
+          password: hash,
           reclamado: true,
-          user_id: userId,
+          user_id: signup.user?.id,
         })
-        .eq('id_invitado', scannedId);
-
-      if (upErr) throw upErr;
+        .eq('id_invitado', invitado.id_invitado);
 
       router.push('/home');
     } catch (err: any) {
       console.error(err);
-      setError(err.message ?? 'Error al procesar el registro/login');
+      setError(err.message || 'Error al registrar');
     } finally {
-      setSaving(false);
+      setLoading(false);
     }
-  }
+  };
+
+  // Iniciar sesión si ya estaba registrado
+  const handleLogin = async () => {
+    if (!invitado) return;
+    if (!password) {
+      setError('Escribe tu contraseña');
+      return;
+    }
+
+    const match = bcrypt.compareSync(password, invitado.password);
+    if (!match) {
+      setError('Contraseña incorrecta');
+      return;
+    }
+
+    const fakeEmail = `${invitado.id_invitado.toLowerCase()}@midea.local`;
+    const { error: loginErr } = await supabase.auth.signInWithPassword({
+      email: fakeEmail,
+      password,
+    });
+    if (loginErr) {
+      console.error(loginErr);
+      setError('Error al iniciar sesión');
+      return;
+    }
+
+    router.push('/home');
+  };
 
   return (
     <div className="container" style={{ maxWidth: 720 }}>
-      <header style={{ margin: '24px 0 16px' }}>
-        <h1 style={{ margin: 0, fontSize: 28, fontWeight: 800 }}>
-          Midea Experience
-        </h1>
-        <p style={{ margin: '8px 0', color: 'var(--text-secondary)' }}>
-          Escaneá tu QR de invitación para comenzar.
-        </p>
-      </header>
+      <h1 style={{ fontWeight: 800, fontSize: 28 }}>Midea Experience — Acceso QR</h1>
+      <p>Escaneá tu código QR para comenzar.</p>
 
-      {/* Lector QR */}
-      <div className="card" style={{ marginBottom: 16 }}>
-        <div style={{ borderRadius: 16, overflow: 'hidden' }}>
-          <Scanner
-            onScan={(value: any) => {
-              const text = getTextFromScan(value);
-              if (!text) return;
-              handleScan(text);
-            }}
-            onError={(err: unknown) =>
-              setError((err as Error)?.message ?? 'Error de cámara')
-            }
-            constraints={{ facingMode: 'environment' }}
-          />
-        </div>
-
-        {scannedId && (
-          <p style={{ marginTop: 12, color: 'var(--text-secondary)' }}>
-            Último QR leído: <strong>{scannedId}</strong>
-          </p>
-        )}
-
-        {error && (
-          <p style={{ marginTop: 8, color: '#dc2626', fontWeight: 600 }}>
-            {error}
-          </p>
-        )}
+      <div className="card" style={{ marginBottom: 20 }}>
+        <Scanner
+          onScan={handleScan}
+          onError={() => setError('Error con la cámara')}
+          constraints={{ facingMode: 'environment' }}
+        />
+        {scannedId && <p>Último QR leído: <strong>{scannedId}</strong></p>}
       </div>
 
-      {/* Formulario */}
-      {invitado && (
-        <form onSubmit={handleSubmit} className="card" style={{ display: 'grid', gap: 12 }}>
-          <p>
-            Bienvenido <strong>{invitado.nombre} {invitado.apellido}</strong>
-          </p>
-
-          {!invitado.reclamado && (
-            <div style={{ display: 'grid', gap: 4 }}>
-              <label htmlFor="email" style={{ fontWeight: 600 }}>
-                Correo
-              </label>
-              <input
-                id="email"
-                type="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="tu@correo.com"
-                style={{
-                  border: '1px solid var(--border)',
-                  borderRadius: 10,
-                  padding: '12px 14px',
-                }}
-              />
-            </div>
-          )}
-
-          <div style={{ display: 'grid', gap: 4 }}>
-            <label htmlFor="password" style={{ fontWeight: 600 }}>
-              Contraseña
-            </label>
-            <input
-              id="password"
-              type="password"
-              required
-              minLength={6}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder={
-                invitado.reclamado
-                  ? 'Ingresá tu contraseña'
-                  : 'Crea una contraseña'
-              }
-              style={{
-                border: '1px solid var(--border)',
-                borderRadius: 10,
-                padding: '12px 14px',
-              }}
-            />
-          </div>
-
-          <button
-            type="submit"
-            className="btn btn-primary"
-            disabled={saving}
-            style={{ justifyContent: 'center' }}
-          >
-            {saving
-              ? 'Procesando...'
-              : invitado.reclamado
-              ? 'Iniciar sesión'
-              : 'Crear cuenta y continuar'}
+      {invitado && !invitado.reclamado && (
+        <div className="card" style={{ display: 'grid', gap: 12 }}>
+          <p>Bienvenido {invitado.nombre} {invitado.apellido}</p>
+          <input
+            type="password"
+            placeholder="Crea tu contraseña"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            style={{ border: '1px solid #ddd', borderRadius: 8, padding: 10 }}
+          />
+          <button onClick={handleRegister} disabled={loading} className="btn btn-primary">
+            {loading ? 'Creando cuenta...' : 'Registrar y continuar'}
           </button>
-        </form>
+        </div>
       )}
+
+      {invitado && invitado.reclamado && (
+        <div className="card" style={{ display: 'grid', gap: 12 }}>
+          <p>Hola {invitado.nombre}, ingresá tu contraseña para continuar:</p>
+          <input
+            type="password"
+            placeholder="Tu contraseña"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            style={{ border: '1px solid #ddd', borderRadius: 8, padding: 10 }}
+          />
+          <button onClick={handleLogin} disabled={loading} className="btn btn-primary">
+            {loading ? 'Ingresando...' : 'Entrar'}
+          </button>
+        </div>
+      )}
+
+      {error && <p style={{ color: 'red', marginTop: 10 }}>{error}</p>}
     </div>
   );
 }
