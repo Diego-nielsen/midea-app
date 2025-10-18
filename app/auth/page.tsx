@@ -13,6 +13,18 @@ type InvitadoInfo = {
   reclamado: boolean | null;
 };
 
+/** Extrae texto del valor que entrega el Scanner (array/obj/string). */
+function getTextFromScan(value: any): string {
+  if (!value) return '';
+  if (typeof value === 'string') return value.trim();
+  if (Array.isArray(value)) {
+    const raw = value[0]?.rawValue ?? value[0];
+    return typeof raw === 'string' ? raw.trim() : String(raw ?? '').trim();
+  }
+  if (value?.rawValue) return String(value.rawValue).trim();
+  return '';
+}
+
 export default function AuthPage() {
   const router = useRouter();
 
@@ -28,7 +40,7 @@ export default function AuthPage() {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  // 1) Cuando escaneamos, buscamos ese invitado
+  /** Consulta un invitado por ID */
   const fetchInvitado = useCallback(async (id: string) => {
     try {
       setError(null);
@@ -43,30 +55,38 @@ export default function AuthPage() {
       if (!data) {
         setInvitado(null);
         setError('Invitado no encontrado.');
-      } else {
-        setInvitado(data as InvitadoInfo);
-        // si ya tenía email, precompletamos
-        if (data.email) setEmail(data.email);
+        return;
       }
+
+      // Si ya fue reclamado, avisamos (puedes permitir “iniciar sesión” en vez de registro)
+      if (data.reclamado) {
+        setInvitado(null);
+        setError('Este invitado ya fue registrado.');
+        return;
+      }
+
+      setInvitado(data as InvitadoInfo);
+      if (data.email) setEmail(data.email);
     } catch (err: any) {
       console.error(err);
-      setError(err.message ?? 'No se pudo consultar el invitado');
+      setInvitado(null);
+      setError(err?.message ?? 'No se pudo consultar el invitado');
     }
   }, []);
 
+  /** Procesa el texto leído por el scanner */
   const handleScan = useCallback(
     async (result: string) => {
       if (!result) return;
       const id = result.trim().toUpperCase();
       if (id === scannedId) return; // evita repetir la misma lectura
-
       setScannedId(id);
       await fetchInvitado(id);
     },
     [fetchInvitado, scannedId]
   );
 
-  // 2) Handler del formulario (REGISTRO)
+  /** Envío del formulario: crea cuenta y actualiza la fila del invitado */
   async function handleRegister(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
@@ -79,32 +99,35 @@ export default function AuthPage() {
       setError('Completa email y contraseña.');
       return;
     }
+    if (!invitado) {
+      setError('Invitado no encontrado o ya reclamado.');
+      return;
+    }
 
     setSaving(true);
     try {
-      // Asegúrate de tener "Confirm email" DESACTIVADO en Auth → Providers → Email
-      const { error: signErr } = await supabase.auth.signUp({
+      // 1) Crear cuenta (sin confirmación de email)
+      const { data: signData, error: signErr } = await supabase.auth.signUp({
         email,
         password,
       });
       if (signErr) throw signErr;
 
-      // Marcar invitado como reclamado + guardar email
+      // 2) (Opcional) guardar metadata con el ID del invitado
+      await supabase.auth.updateUser({ data: { invite_id: scannedId } });
+
+      // 3) Marcar invitado como reclamado + guardar email
       const { error: upErr } = await supabase
         .from('invitados')
-        .update({
-          email,
-          reclamado: true,
-        })
+        .update({ email, reclamado: true })
         .eq('id_invitado', scannedId);
-
       if (upErr) throw upErr;
 
-      // Redirige a home (o a la página que quieras)
+      // 4) Redirigir a home
       router.push('/home');
     } catch (err: any) {
       console.error(err);
-      setError(err.message ?? 'No se pudo completar el registro');
+      setError(err?.message ?? 'No se pudo completar el registro');
     } finally {
       setSaving(false);
     }
@@ -125,13 +148,16 @@ export default function AuthPage() {
       <div className="card" style={{ marginBottom: 16 }}>
         <div style={{ borderRadius: 16, overflow: 'hidden' }}>
           <Scanner
-  onScan={(val) => handleScan(String(val))}
-  onError={(err: unknown) =>
-    setError((err as Error)?.message ?? 'Error de cámara')
-  }
-  constraints={{ facingMode: 'environment' }}
-/>
-
+            onScan={(value: any) => {
+              const text = getTextFromScan(value);
+              if (!text) return;
+              handleScan(text);
+            }}
+            onError={(err: unknown) =>
+              setError((err as Error)?.message ?? 'Error de cámara')
+            }
+            constraints={{ facingMode: 'environment' }}
+          />
         </div>
 
         {scannedId && (
@@ -147,13 +173,11 @@ export default function AuthPage() {
         )}
       </div>
 
-      {/* Formulario de registro (solo si existe el invitado) */}
+      {/* Formulario (solo si el invitado existe y no está reclamado) */}
       {invitado && (
         <form onSubmit={handleRegister} className="card" style={{ display: 'grid', gap: 12 }}>
           <div style={{ display: 'grid', gap: 4 }}>
-            <label htmlFor="email" style={{ fontWeight: 600 }}>
-              Correo
-            </label>
+            <label htmlFor="email" style={{ fontWeight: 600 }}>Correo</label>
             <input
               id="email"
               type="email"
@@ -171,9 +195,7 @@ export default function AuthPage() {
           </div>
 
           <div style={{ display: 'grid', gap: 4 }}>
-            <label htmlFor="password" style={{ fontWeight: 600 }}>
-              Contraseña
-            </label>
+            <label htmlFor="password" style={{ fontWeight: 600 }}>Contraseña</label>
             <input
               id="password"
               type="password"
@@ -202,7 +224,7 @@ export default function AuthPage() {
         </form>
       )}
 
-      {/* Si escaneaste un QR válido pero no existe en la DB */}
+      {/* Si hay QR pero no hay invitado (o ya reclamado) */}
       {scannedId && !invitado && !error && (
         <div className="card" style={{ marginTop: 12 }}>
           <p>Buscando invitado…</p>
