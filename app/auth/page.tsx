@@ -3,8 +3,14 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { QrScanner } from '@yudiel/react-qr-scanner';
+import dynamic from 'next/dynamic';
 import { supabase } from '../../lib/supabase';
+
+// Cargar el componente del scanner solo en cliente
+const QrScanner = dynamic(
+  () => import('@yudiel/react-qr-scanner').then(m => m.Scanner),
+  { ssr: false }
+);
 
 type InvitadoInfo = {
   id_invitado: string;
