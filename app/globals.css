@@ -1,7 +1,12 @@
+/* app/globals.css */
+@import "tailwindcss";
+
+/* ====== Tokens de color (puedes actualizarlos con los oficiales) ====== */
 :root{
-  /* TODO: cambia estos HEX por los oficiales de la guía cuando te los confirmen */
-  --midea-blue: #00A0E9; /* Midea Blue (placeholder) */
-  --midea-blue-dark: #007fba; /* tono más oscuro (placeholder) */
+  --midea-blue: #00A0E9;
+  --midea-blue-dark: #008ACB;
+  --midea-sky: #E6F3FB;
+
   --text-primary: #0a0a0a;
   --text-secondary: #4b5563;
   --surface: #ffffff;
@@ -9,106 +14,88 @@
   --border: #e5e7eb;
 }
 
+/* ====== Resets mínimos ====== */
 * { box-sizing: border-box; }
 html, body { height: 100%; }
 html { color-scheme: light; }
+
+/* Body con Tailwind (look más “tech” y mobile-first) */
 body{
   margin: 0;
   font-family: var(--font-sans), system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji","Segoe UI Emoji";
-  background: var(--surface);
-  color: var(--text-primary);
+  /* Fondo suave en degrade */
+  @apply bg-gradient-to-b from-[var(--midea-sky)] to-white text-slate-800 antialiased;
 }
 
+/* ====== Utilidades custom (mapeadas a Tailwind con @apply) ====== */
+
+/* Contenedor centrado */
 .container{
-  max-width: 960px;
-  margin: 0 auto;
-  padding: 24px;
+  @apply max-w-screen-md mx-auto px-4;
 }
 
+/* Hero / bloque principal */
 .hero{
-  display:grid;
-  place-items:center;
-  padding: 48px 24px 16px;
+  @apply grid place-items-center pt-12 pb-4 px-4;
 }
 
+/* Brand lockup */
 .brand-lockup{
-  display:flex;
-  flex-direction:column;
-  align-items:center;
-  gap: 16px;
-  text-align:center;
+  @apply flex flex-col items-center gap-4 text-center;
 }
-
 .brand-title{
-  font-weight: 600;
-  font-size: clamp(24px, 3vw, 32px);
-  letter-spacing: 0.2px;
+  @apply font-semibold tracking-wide;
+  font-size: clamp(24px, 3vw, 32px); /* mantenemos tu clamp */
 }
-
 .subtitle{
   color: var(--text-secondary);
-  font-size: 16px;
+  @apply text-base;
 }
 
+/* Card */
 .card{
   background: var(--surface-2);
   border: 1px solid var(--border);
-  border-radius: 16px;
-  padding: 20px;
+  @apply rounded-2xl p-5 shadow-[0_10px_25px_-10px_rgba(0,0,0,.15)];
 }
 
-.actions{
-  display:flex;
-  flex-wrap:wrap;
-  gap:12px;
-  justify-content:center;
-}
-
+/* Botones */
 .btn{
-  appearance: none;
-  display:inline-flex;
-  align-items:center;
-  justify-content:center;
-  gap:8px;
-  padding: 12px 16px;
-  border-radius: 12px;
+  /* mantenemos tu API de clases, pero con Tailwind */
+  @apply inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl font-semibold text-sm transition-colors;
   border: 1px solid transparent;
-  cursor:pointer;
-  font-weight:600;
-  text-decoration:none;
+  text-decoration: none;
+  cursor: pointer;
 }
-
 .btn-primary{
-  background: var(--midea-blue);
   color: white;
+  background: var(--midea-blue);
+  @apply shadow;
 }
-.btn-primary:hover{ background: var(--midea-blue-dark); }
-
+.btn-primary:hover{
+  background: var(--midea-blue-dark);
+}
 .btn-outline{
   background: white;
   border-color: var(--border);
   color: var(--text-primary);
+  @apply border;
 }
-.btn-outline:hover{ border-color: #cbd5e1; }
+.btn-outline:hover{
+  @apply bg-slate-50 border-slate-300;
+}
 
+/* KPIs */
 .kpi{
-  display:flex;
-  gap: 16px;
-  justify-content:center;
+  @apply flex gap-4 justify-center;
 }
 .kpi-item{
-  min-width: 140px;
-  background:white;
-  border:1px solid var(--border);
-  border-radius:12px;
-  padding:12px;
-  text-align:center;
+  @apply min-w-[140px] bg-white border border-[var(--border)] rounded-xl p-3 text-center;
 }
 .kpi-value{
-  font-size:22px;
-  font-weight:700;
+  @apply text-xl font-bold;
 }
 .kpi-label{
   color: var(--text-secondary);
-  font-size:12px;
+  @apply text-xs;
 }
