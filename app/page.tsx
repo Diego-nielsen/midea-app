@@ -94,9 +94,7 @@ export default function HomePage() {
 
         {/* Footer simple */}
         <footer style={{textAlign:'center', color:'var(--text-secondary)'}}>
-          <small>Branding siguiendo la guía de marca Midea (paleta primaria, Gotham). :contentReference[oaicite:1]{index=1}</small>
-        </footer>
-      </main>
-    </>
-  );
-}
+          <small>Branding siguiendo la guía de marca Midea (paleta primaria, Gotham).{/* Footer simple */}
+<footer style={{ textAlign: 'center', color: 'var(--text-secondary)' }}>
+  <small>Branding siguiendo la guía de marca Midea (paleta primaria, tipografía corporativa).</small>
+</footer>
