@@ -4,7 +4,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { QrScanner } from '@yudiel/react-qr-scanner';
-import { supabase } from '@/lib/supabase';
+import { supabase } from '../../lib/supabase';
 
 type InvitadoInfo = {
   id_invitado: string;
