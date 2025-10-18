@@ -125,10 +125,13 @@ export default function AuthPage() {
       <div className="card" style={{ marginBottom: 16 }}>
         <div style={{ borderRadius: 16, overflow: 'hidden' }}>
           <Scanner
-            onScan={(val) => handleScan(String(val))}
-            onError={(err) => setError(err?.message ?? 'Error de cámara')}
-            constraints={{ facingMode: 'environment' }}
-          />
+  onScan={(val) => handleScan(String(val))}
+  onError={(err: unknown) =>
+    setError((err as Error)?.message ?? 'Error de cámara')
+  }
+  constraints={{ facingMode: 'environment' }}
+/>
+
         </div>
 
         {scannedId && (
