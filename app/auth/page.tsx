@@ -3,7 +3,6 @@ import React, { useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { Scanner } from '@yudiel/react-qr-scanner';
 import { supabase } from '../../lib/supabase';
-import bcrypt from 'bcryptjs';
 
 export default function AuthQR() {
   const router = useRouter();
@@ -32,7 +31,10 @@ export default function AuthQR() {
   // Cuando escanea QR
   const handleScan = useCallback(async (value: any) => {
     if (!value) return;
-    const id = typeof value === 'string' ? value.trim().toUpperCase() : String(value?.rawValue ?? '').trim().toUpperCase();
+    const id = typeof value === 'string'
+      ? value.trim().toUpperCase()
+      : String(value?.rawValue ?? '').trim().toUpperCase();
+
     if (!id || id === scannedId) return;
     setScannedId(id);
     await fetchInvitado(id);
@@ -48,21 +50,20 @@ export default function AuthQR() {
 
     setLoading(true);
     try {
-      const hash = bcrypt.hashSync(password, 10);
       const fakeEmail = `${invitado.id_invitado.toLowerCase()}@midea.local`;
 
-      // Crear usuario interno
+      // Crear usuario interno en Auth (sin confirmación)
       const { data: signup, error: signupErr } = await supabase.auth.signUp({
         email: fakeEmail,
         password,
       });
       if (signupErr) throw signupErr;
 
-      // Guardar en la tabla invitados
+      // Guardar contraseña y marcar como reclamado
       await supabase
         .from('invitados')
         .update({
-          password: hash,
+          password,
           reclamado: true,
           user_id: signup.user?.id,
         })
@@ -85,8 +86,7 @@ export default function AuthQR() {
       return;
     }
 
-    const match = bcrypt.compareSync(password, invitado.password);
-    if (!match) {
+    if (password !== invitado.password) {
       setError('Contraseña incorrecta');
       return;
     }
