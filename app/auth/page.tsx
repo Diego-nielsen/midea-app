@@ -1,79 +1,40 @@
 'use client';
 
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import dynamic from 'next/dynamic';
+import { Scanner } from '@yudiel/react-qr-scanner';
 import { supabase } from '../../lib/supabase';
-
-// Import dinámico del componente correcto de la librería
-const QrScanner = dynamic(
-  () => import('@yudiel/react-qr-scanner').then((m) => m.Scanner),
-  { ssr: false }
-);
 
 type InvitadoInfo = {
   id_invitado: string;
-  nombre: string;
-  apellido: string;
+  nombre: string | null;
+  apellido: string | null;
   email: string | null;
-  reclamado: boolean;
+  reclamado: boolean | null;
 };
 
 export default function AuthPage() {
   const router = useRouter();
 
-  // UI / estado
-  const [scannedText, setScannedText] = useState<string>('');
+  // QR + invitado
+  const [scannedId, setScannedId] = useState<string>(''); // U001, U002…
   const [invitado, setInvitado] = useState<InvitadoInfo | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [cameraError, setCameraError] = useState<string | null>(null);
-  const [appError, setAppError] = useState<string | null>(null);
 
-  // form registro
+  // Formulario
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
 
-  // --- helpers ----------------------------------------------------------------
+  // UI
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
-  // Normaliza el valor que devuelve el scanner (puede ser string, objeto o array)
-  const extractTextFromScan = (value: any): string => {
-    if (!value) return '';
-    if (typeof value === 'string') return value.trim();
-
-    // algunos builds devuelven array de barcodes
-    if (Array.isArray(value)) {
-      const raw = value[0]?.rawValue ?? value[0] ?? '';
-      return (typeof raw === 'string' ? raw : `${raw}`).trim();
-    }
-
-    // objeto con rawValue
-    if (value?.rawValue) return String(value.rawValue).trim();
-
-    return '';
-  };
-
-  // Si tu QR para invitado trae directamente "U001", esto lo deja igual.
-  // Si algún día decides usar "type:inv;id:U001", igual lo pesca.
-  const parseInviteId = (text: string): string | null => {
-    const t = text.trim();
-
-    // formato directo
-    if (/^[A-Za-z0-9_-]+$/.test(t)) return t;
-
-    // formato "type:inv;id:U001" o "type=inv|id=U001"
-    const m = t.match(/id\s*[:=]\s*([A-Za-z0-9_-]+)/i);
-    if (m?.[1]) return m[1];
-
-    return null;
-  };
-
-  const fetchInvitado = async (id: string) => {
-    setLoading(true);
-    setAppError(null);
+  // 1) Cuando escaneamos, buscamos ese invitado
+  const fetchInvitado = useCallback(async (id: string) => {
     try {
+      setError(null);
       const { data, error } = await supabase
         .from('invitados')
-        .select('id_invitado, nombre, apellido, email, reclamado')
+        .select('id_invitado,nombre,apellido,email,reclamado')
         .eq('id_invitado', id)
         .maybeSingle();
 
@@ -81,174 +42,169 @@ export default function AuthPage() {
 
       if (!data) {
         setInvitado(null);
-        setAppError('Invitado no encontrado.');
-        return;
+        setError('Invitado no encontrado.');
+      } else {
+        setInvitado(data as InvitadoInfo);
+        // si ya tenía email, precompletamos
+        if (data.email) setEmail(data.email);
       }
-
-      setInvitado(data as InvitadoInfo);
     } catch (err: any) {
-      setInvitado(null);
-      setAppError(err?.message ?? 'Error consultando invitado.');
-    } finally {
-      setLoading(false);
+      console.error(err);
+      setError(err.message ?? 'No se pudo consultar el invitado');
     }
-  };
+  }, []);
 
-  // --- handlers ---------------------------------------------------------------
+  const handleScan = useCallback(
+    async (result: string) => {
+      if (!result) return;
+      const id = result.trim().toUpperCase();
+      if (id === scannedId) return; // evita repetir la misma lectura
 
-  // Llamado por el componente del scanner
-  const handleScan = async (value: any) => {
-    const text = extractTextFromScan(value);
-    if (!text || text === scannedText) return; // evita loops con el mismo valor
+      setScannedId(id);
+      await fetchInvitado(id);
+    },
+    [fetchInvitado, scannedId]
+  );
 
-    setScannedText(text);
-
-    const inviteId = parseInviteId(text);
-    if (!inviteId) {
-      setAppError('QR inválido. Debe contener un ID de invitado.');
-      setInvitado(null);
-      return;
-    }
-
-    await fetchInvitado(inviteId);
-  };
-
-  const handleRegister = async (e: React.FormEvent) => {
+  // 2) Handler del formulario (REGISTRO)
+  async function handleRegister(e: React.FormEvent) {
     e.preventDefault();
-    if (!invitado) {
-      setAppError('Primero escanea tu código de invitación.');
+    setError(null);
+
+    if (!scannedId) {
+      setError('Primero escanea tu QR de invitación.');
       return;
     }
     if (!email || !password) {
-      setAppError('Ingresa correo y contraseña.');
+      setError('Completa email y contraseña.');
       return;
     }
 
-    setLoading(true);
-    setAppError(null);
-
+    setSaving(true);
     try {
-      // 1) Registrar usuario en Supabase Auth
-      const { data: signUpRes, error: signUpErr } = await supabase.auth.signUp({
+      // Asegúrate de tener "Confirm email" DESACTIVADO en Auth → Providers → Email
+      const { error: signErr } = await supabase.auth.signUp({
         email,
         password,
-        options: {
-          data: {
-            invite_id: invitado.id_invitado,
-            nombre: invitado.nombre,
-            apellido: invitado.apellido,
-          },
-        },
       });
-      if (signUpErr) throw signUpErr;
+      if (signErr) throw signErr;
 
-      // 2) Marcar invitado como reclamado y guardar su email
-      const { error: updErr } = await supabase
+      // Marcar invitado como reclamado + guardar email
+      const { error: upErr } = await supabase
         .from('invitados')
-        .update({ reclamado: true, email })
-        .eq('id_invitado', invitado.id_invitado);
-      if (updErr) throw updErr;
+        .update({
+          email,
+          reclamado: true,
+        })
+        .eq('id_invitado', scannedId);
 
-      // 3) Redirigir a la home (ajusta la ruta si usas otra)
-      router.replace('/home');
+      if (upErr) throw upErr;
+
+      // Redirige a home (o a la página que quieras)
+      router.push('/home');
     } catch (err: any) {
-      setAppError(err?.message ?? 'Error registrando usuario.');
+      console.error(err);
+      setError(err.message ?? 'No se pudo completar el registro');
     } finally {
-      setLoading(false);
+      setSaving(false);
     }
-  };
-
-  const alreadyClaimed = useMemo(() => invitado?.reclamado === true, [invitado]);
-
-  // --- UI ---------------------------------------------------------------------
+  }
 
   return (
-    <div className="min-h-screen w-full flex items-center justify-center p-4 bg-slate-50">
-      <div className="w-full max-w-md space-y-6">
-        <div className="text-center">
-          <h1 className="text-2xl font-semibold">Registro — Midea Experience</h1>
-          <p className="text-sm text-slate-600">
-            Escaneá tu QR de invitación para comenzar.
-          </p>
-        </div>
+    <div className="container" style={{ maxWidth: 720 }}>
+      <header style={{ margin: '24px 0 16px' }}>
+        <h1 style={{ margin: 0, fontSize: 28, fontWeight: 800, color: 'var(--text-primary)' }}>
+          Registro — Midea Experience
+        </h1>
+        <p style={{ margin: '8px 0', color: 'var(--text-secondary)' }}>
+          Escaneá tu QR de invitación para comenzar.
+        </p>
+      </header>
 
-        {/* Scanner */}
-        <div className="rounded-xl overflow-hidden border bg-black">
-          <QrScanner
-            onScan={(value: any) => handleScan(value)}
-            onError={(err: unknown) =>
-              setCameraError((err as Error)?.message ?? 'Error de cámara')
-            }
+      {/* Lector QR */}
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div style={{ borderRadius: 16, overflow: 'hidden' }}>
+          <Scanner
+            onScan={(val) => handleScan(String(val))}
+            onError={(err) => setError(err?.message ?? 'Error de cámara')}
             constraints={{ facingMode: 'environment' }}
           />
         </div>
 
-        {/* Mensajes */}
-        {cameraError && (
-          <p className="text-sm text-amber-600">
-            {cameraError} — Probá dar permiso a la cámara o cambiar de navegador.
+        {scannedId && (
+          <p style={{ marginTop: 12, color: 'var(--text-secondary)' }}>
+            Último QR leído: <strong>{scannedId}</strong>
           </p>
         )}
-        {appError && <p className="text-sm text-red-600">{appError}</p>}
 
-        {/* Resultado del scan */}
-        {invitado && (
-          <div className="rounded-lg border bg-white p-4">
-            <p className="text-sm text-slate-500">Código: {invitado.id_invitado}</p>
-            <p className="text-base font-medium">
-              {invitado.nombre} {invitado.apellido}
-            </p>
-
-            {alreadyClaimed ? (
-              <div className="mt-3 text-sm text-amber-700">
-                Este invitado ya fue registrado. Si sos vos, iniciá sesión; si no, consulta
-                con el staff.
-              </div>
-            ) : (
-              <form onSubmit={handleRegister} className="mt-4 space-y-3">
-                <div>
-                  <label className="block text-sm font-medium mb-1">Correo</label>
-                  <input
-                    type="email"
-                    required
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-sky-500"
-                    placeholder="tucorreo@ejemplo.com"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium mb-1">Contraseña</label>
-                  <input
-                    type="password"
-                    required
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className="w-full rounded-md border px-3 py-2 outline-none focus:ring-2 focus:ring-sky-500"
-                    placeholder="Mínimo 6 caracteres"
-                  />
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="w-full rounded-md bg-sky-700 text-white py-2 font-medium hover:bg-sky-800 disabled:opacity-60"
-                >
-                  {loading ? 'Registrando…' : 'Registrarme'}
-                </button>
-              </form>
-            )}
-          </div>
-        )}
-
-        {/* Debug opcional del último texto escaneado */}
-        {scannedText && (
-          <p className="text-xs text-slate-500">
-            Último QR leído: <span className="font-mono">{scannedText}</span>
+        {error && (
+          <p style={{ marginTop: 8, color: '#dc2626', fontWeight: 600 }}>
+            {error}
           </p>
         )}
       </div>
+
+      {/* Formulario de registro (solo si existe el invitado) */}
+      {invitado && (
+        <form onSubmit={handleRegister} className="card" style={{ display: 'grid', gap: 12 }}>
+          <div style={{ display: 'grid', gap: 4 }}>
+            <label htmlFor="email" style={{ fontWeight: 600 }}>
+              Correo
+            </label>
+            <input
+              id="email"
+              type="email"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="tu@correo.com"
+              style={{
+                border: '1px solid var(--border)',
+                borderRadius: 10,
+                padding: '12px 14px',
+                outline: 'none',
+              }}
+            />
+          </div>
+
+          <div style={{ display: 'grid', gap: 4 }}>
+            <label htmlFor="password" style={{ fontWeight: 600 }}>
+              Contraseña
+            </label>
+            <input
+              id="password"
+              type="password"
+              required
+              minLength={6}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Mínimo 6 caracteres"
+              style={{
+                border: '1px solid var(--border)',
+                borderRadius: 10,
+                padding: '12px 14px',
+                outline: 'none',
+              }}
+            />
+          </div>
+
+          <button
+            type="submit"
+            className="btn btn-primary"
+            disabled={saving}
+            style={{ justifyContent: 'center' }}
+          >
+            {saving ? 'Guardando…' : 'Crear cuenta y continuar'}
+          </button>
+        </form>
+      )}
+
+      {/* Si escaneaste un QR válido pero no existe en la DB */}
+      {scannedId && !invitado && !error && (
+        <div className="card" style={{ marginTop: 12 }}>
+          <p>Buscando invitado…</p>
+        </div>
+      )}
     </div>
   );
 }
