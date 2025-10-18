@@ -11,9 +11,9 @@ type InvitadoInfo = {
   apellido: string | null;
   email: string | null;
   reclamado: boolean | null;
+  user_id?: string | null;
 };
 
-/** Extrae texto del valor que entrega el Scanner (array/obj/string). */
 function getTextFromScan(value: any): string {
   if (!value) return '';
   if (typeof value === 'string') return value.trim();
@@ -28,25 +28,21 @@ function getTextFromScan(value: any): string {
 export default function AuthPage() {
   const router = useRouter();
 
-  // QR + invitado
-  const [scannedId, setScannedId] = useState<string>(''); // U001, U002…
+  const [scannedId, setScannedId] = useState('');
   const [invitado, setInvitado] = useState<InvitadoInfo | null>(null);
 
-  // Formulario
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-
-  // UI
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
-  /** Consulta un invitado por ID */
+  // Buscar invitado por QR
   const fetchInvitado = useCallback(async (id: string) => {
     try {
       setError(null);
       const { data, error } = await supabase
         .from('invitados')
-        .select('id_invitado,nombre,apellido,email,reclamado')
+        .select('*')
         .eq('id_invitado', id)
         .maybeSingle();
 
@@ -55,79 +51,76 @@ export default function AuthPage() {
       if (!data) {
         setInvitado(null);
         setError('Invitado no encontrado.');
-        return;
+      } else {
+        setInvitado(data as InvitadoInfo);
+        if (data.email) setEmail(data.email);
       }
-
-      // Si ya fue reclamado, avisamos (puedes permitir “iniciar sesión” en vez de registro)
-      if (data.reclamado) {
-        setInvitado(null);
-        setError('Este invitado ya fue registrado.');
-        return;
-      }
-
-      setInvitado(data as InvitadoInfo);
-      if (data.email) setEmail(data.email);
     } catch (err: any) {
       console.error(err);
-      setInvitado(null);
-      setError(err?.message ?? 'No se pudo consultar el invitado');
+      setError(err.message ?? 'Error al buscar invitado');
     }
   }, []);
 
-  /** Procesa el texto leído por el scanner */
   const handleScan = useCallback(
     async (result: string) => {
       if (!result) return;
       const id = result.trim().toUpperCase();
-      if (id === scannedId) return; // evita repetir la misma lectura
+      if (id === scannedId) return;
+
       setScannedId(id);
       await fetchInvitado(id);
     },
     [fetchInvitado, scannedId]
   );
 
-  /** Envío del formulario: crea cuenta y actualiza la fila del invitado */
-  async function handleRegister(e: React.FormEvent) {
+  // Registro o login
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
 
-    if (!scannedId) {
-      setError('Primero escanea tu QR de invitación.');
-      return;
-    }
-    if (!email || !password) {
-      setError('Completa email y contraseña.');
-      return;
-    }
-    if (!invitado) {
-      setError('Invitado no encontrado o ya reclamado.');
-      return;
-    }
+    if (!scannedId) return setError('Escanea tu QR primero.');
+    if (!invitado) return setError('Invitado no encontrado.');
+    if (!password) return setError('Ingresá una contraseña.');
 
     setSaving(true);
     try {
-      // 1) Crear cuenta (sin confirmación de email)
+      // Si ya tiene cuenta → LOGIN
+      if (invitado.reclamado && invitado.email) {
+        const { error: signErr } = await supabase.auth.signInWithPassword({
+          email: invitado.email,
+          password,
+        });
+        if (signErr) throw new Error('Contraseña incorrecta');
+        router.push('/home');
+        return;
+      }
+
+      // Si es nuevo → REGISTRO
+      if (!email) return setError('Ingresá un correo para registrarte.');
+
       const { data: signData, error: signErr } = await supabase.auth.signUp({
         email,
         password,
       });
       if (signErr) throw signErr;
 
-      // 2) (Opcional) guardar metadata con el ID del invitado
-      await supabase.auth.updateUser({ data: { invite_id: scannedId } });
+      const userId = signData.user?.id;
 
-      // 3) Marcar invitado como reclamado + guardar email
       const { error: upErr } = await supabase
         .from('invitados')
-        .update({ email, reclamado: true })
+        .update({
+          email,
+          reclamado: true,
+          user_id: userId,
+        })
         .eq('id_invitado', scannedId);
+
       if (upErr) throw upErr;
 
-      // 4) Redirigir a home
       router.push('/home');
     } catch (err: any) {
       console.error(err);
-      setError(err?.message ?? 'No se pudo completar el registro');
+      setError(err.message ?? 'Error al procesar el registro/login');
     } finally {
       setSaving(false);
     }
@@ -136,8 +129,8 @@ export default function AuthPage() {
   return (
     <div className="container" style={{ maxWidth: 720 }}>
       <header style={{ margin: '24px 0 16px' }}>
-        <h1 style={{ margin: 0, fontSize: 28, fontWeight: 800, color: 'var(--text-primary)' }}>
-          Registro — Midea Experience
+        <h1 style={{ margin: 0, fontSize: 28, fontWeight: 800 }}>
+          Midea Experience
         </h1>
         <p style={{ margin: '8px 0', color: 'var(--text-secondary)' }}>
           Escaneá tu QR de invitación para comenzar.
@@ -173,29 +166,38 @@ export default function AuthPage() {
         )}
       </div>
 
-      {/* Formulario (solo si el invitado existe y no está reclamado) */}
+      {/* Formulario */}
       {invitado && (
-        <form onSubmit={handleRegister} className="card" style={{ display: 'grid', gap: 12 }}>
-          <div style={{ display: 'grid', gap: 4 }}>
-            <label htmlFor="email" style={{ fontWeight: 600 }}>Correo</label>
-            <input
-              id="email"
-              type="email"
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="tu@correo.com"
-              style={{
-                border: '1px solid var(--border)',
-                borderRadius: 10,
-                padding: '12px 14px',
-                outline: 'none',
-              }}
-            />
-          </div>
+        <form onSubmit={handleSubmit} className="card" style={{ display: 'grid', gap: 12 }}>
+          <p>
+            Bienvenido <strong>{invitado.nombre} {invitado.apellido}</strong>
+          </p>
+
+          {!invitado.reclamado && (
+            <div style={{ display: 'grid', gap: 4 }}>
+              <label htmlFor="email" style={{ fontWeight: 600 }}>
+                Correo
+              </label>
+              <input
+                id="email"
+                type="email"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="tu@correo.com"
+                style={{
+                  border: '1px solid var(--border)',
+                  borderRadius: 10,
+                  padding: '12px 14px',
+                }}
+              />
+            </div>
+          )}
 
           <div style={{ display: 'grid', gap: 4 }}>
-            <label htmlFor="password" style={{ fontWeight: 600 }}>Contraseña</label>
+            <label htmlFor="password" style={{ fontWeight: 600 }}>
+              Contraseña
+            </label>
             <input
               id="password"
               type="password"
@@ -203,12 +205,15 @@ export default function AuthPage() {
               minLength={6}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="Mínimo 6 caracteres"
+              placeholder={
+                invitado.reclamado
+                  ? 'Ingresá tu contraseña'
+                  : 'Crea una contraseña'
+              }
               style={{
                 border: '1px solid var(--border)',
                 borderRadius: 10,
                 padding: '12px 14px',
-                outline: 'none',
               }}
             />
           </div>
@@ -219,16 +224,13 @@ export default function AuthPage() {
             disabled={saving}
             style={{ justifyContent: 'center' }}
           >
-            {saving ? 'Guardando…' : 'Crear cuenta y continuar'}
+            {saving
+              ? 'Procesando...'
+              : invitado.reclamado
+              ? 'Iniciar sesión'
+              : 'Crear cuenta y continuar'}
           </button>
         </form>
-      )}
-
-      {/* Si hay QR pero no hay invitado (o ya reclamado) */}
-      {scannedId && !invitado && !error && (
-        <div className="card" style={{ marginTop: 12 }}>
-          <p>Buscando invitado…</p>
-        </div>
       )}
     </div>
   );
